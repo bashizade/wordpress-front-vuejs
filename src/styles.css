@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg-page: #f8fafc;
+  --bg-panel: #ffffff;
+  --text-main: #0f172a;
+  --text-soft: #64748b;
+  --line: #e2e8f0;
+}
+
+.dark {
+  --bg-page: #020617;
+  --bg-panel: #0f172a;
+  --text-main: #e2e8f0;
+  --text-soft: #94a3b8;
+  --line: #1e293b;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Space Grotesk",
+    "Segoe UI",
+    sans-serif;
+  background: radial-gradient(circle at top right, #dbeafe 0%, var(--bg-page) 45%);
+  color: var(--text-main);
+}
+
+.dark body {
+  background: radial-gradient(circle at top right, #1e293b 0%, var(--bg-page) 45%);
+}
+
+html[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+html[dir="rtl"] body {
+  font-family:
+    "Vazirmatn",
+    "Tahoma",
+    "Segoe UI",
+    sans-serif;
+}
+
+html[dir="rtl"] .el-dialog__header,
+html[dir="rtl"] .el-dialog__title,
+html[dir="rtl"] .el-form-item__label {
+  text-align: right;
+}
+
+html[dir="rtl"] .el-table th,
+html[dir="rtl"] .el-table td {
+  text-align: right;
+}
+
+html[dir="rtl"] .el-message {
+  direction: rtl;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.title {
+  font-size: 1.3rem;
+  font-weight: 700;
+}
