@@ -31,7 +31,8 @@
                  "coupons":  "Coupons",
                  "users":  "Users",
                  "customFields":  "User Custom Fields",
-                 "postCustomFields":  "Post Custom Fields"
+                 "postCustomFields":  "Post Custom Fields",
+                 "cptBuilder":  "CPT Builder"
              },
     "topbar":  {
                    "welcome":  "Welcome",

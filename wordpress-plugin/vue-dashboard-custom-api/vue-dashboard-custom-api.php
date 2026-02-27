@@ -19,6 +19,7 @@ const VUE_AUTH_TOKEN_TTL = 604800; // 7 days
 const VUE_AUTH_LOGIN_ATTEMPT_LIMIT = 10;
 const VUE_AUTH_LOGIN_ATTEMPT_WINDOW = 600;
 const VUE_POST_FIELDS_SCHEMA_OPTION = 'vue_dashboard_post_custom_fields_schema';
+const VUE_DYNAMIC_CPT_OPTION = 'vue_dashboard_dynamic_cpt_definitions';
 
 class Vue_Ippanel_SMS_Service
 {
@@ -1601,3 +1602,361 @@ function vue_post_fields_add_to_wc_response($response, $object)
     return $response;
 }
 add_filter('woocommerce_rest_prepare_product_object', 'vue_post_fields_add_to_wc_response', 10, 2);
+
+function vue_dynamic_cpt_allowed_supports()
+{
+    return ['title', 'editor', 'thumbnail', 'excerpt', 'custom-fields', 'revisions', 'author', 'comments', 'page-attributes'];
+}
+
+function vue_dynamic_cpt_reserved_slugs()
+{
+    return ['post', 'page', 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'user_request', 'wp_block', 'wp_template', 'wp_template_part', 'wp_global_styles', 'wp_navigation', 'product', 'shop_order', 'shop_coupon'];
+}
+
+function vue_dynamic_cpt_get_definitions()
+{
+    $items = get_option(VUE_DYNAMIC_CPT_OPTION, []);
+    return is_array($items) ? $items : [];
+}
+
+function vue_dynamic_cpt_save_definitions($definitions)
+{
+    update_option(VUE_DYNAMIC_CPT_OPTION, $definitions, false);
+}
+
+function vue_dynamic_cpt_sanitize_definition($payload, $existing_slug = '')
+{
+    $slug = sanitize_key($payload['slug'] ?? '');
+    if ($slug === '') {
+        return new WP_Error('invalid_slug', 'Slug is required', ['status' => 400]);
+    }
+    if (!preg_match('/^[a-z][a-z0-9_]{1,19}$/', $slug)) {
+        return new WP_Error('invalid_slug', 'Slug must be 2-20 chars and contain lowercase letters, numbers, underscore', ['status' => 400]);
+    }
+    $reserved = vue_dynamic_cpt_reserved_slugs();
+    if (in_array($slug, $reserved, true)) {
+        return new WP_Error('reserved_slug', 'This slug is reserved', ['status' => 400]);
+    }
+    if ($existing_slug !== $slug && post_type_exists($slug)) {
+        return new WP_Error('slug_exists', 'A post type with this slug already exists', ['status' => 409]);
+    }
+
+    $supports_input = is_array($payload['supports'] ?? null) ? $payload['supports'] : [];
+    $supports = [];
+    foreach ($supports_input as $support) {
+        $support = sanitize_key($support);
+        if (in_array($support, vue_dynamic_cpt_allowed_supports(), true)) {
+            $supports[] = $support;
+        }
+    }
+    if (empty($supports)) {
+        $supports = ['title', 'editor'];
+    }
+
+    $taxonomies_input = is_array($payload['taxonomies'] ?? null) ? $payload['taxonomies'] : [];
+    $taxonomies = [];
+    foreach ($taxonomies_input as $taxonomy) {
+        $taxonomy = sanitize_key($taxonomy);
+        if ($taxonomy !== '') {
+            $taxonomies[] = $taxonomy;
+        }
+    }
+
+    return [
+        'slug' => $slug,
+        'singular' => sanitize_text_field((string) ($payload['singular'] ?? $slug)),
+        'plural' => sanitize_text_field((string) ($payload['plural'] ?? $slug)),
+        'icon' => sanitize_text_field((string) ($payload['icon'] ?? 'Document')),
+        'supports' => array_values(array_unique($supports)),
+        'public' => !empty($payload['public']),
+        'show_in_rest' => array_key_exists('show_in_rest', (array) $payload) ? !empty($payload['show_in_rest']) : true,
+        'has_archive' => !empty($payload['has_archive']),
+        'taxonomies' => array_values(array_unique($taxonomies)),
+        'menu_position' => isset($payload['menu_position']) ? (int) $payload['menu_position'] : 25,
+        'hierarchical' => !empty($payload['hierarchical']),
+        'order' => isset($payload['order']) ? (int) $payload['order'] : 0,
+    ];
+}
+
+function vue_dynamic_cpt_flush_rewrite_rules()
+{
+    flush_rewrite_rules(false);
+}
+
+function vue_dynamic_cpt_register_all()
+{
+    $definitions = vue_dynamic_cpt_get_definitions();
+    if (empty($definitions)) {
+        return;
+    }
+
+    usort($definitions, function ($a, $b) {
+        return ((int) ($a['order'] ?? 0)) <=> ((int) ($b['order'] ?? 0));
+    });
+
+    foreach ($definitions as $definition) {
+        if (!is_array($definition)) {
+            continue;
+        }
+        $slug = sanitize_key($definition['slug'] ?? '');
+        if ($slug === '' || post_type_exists($slug)) {
+            continue;
+        }
+        register_post_type($slug, [
+            'labels' => [
+                'name' => $definition['plural'] ?? ucfirst($slug),
+                'singular_name' => $definition['singular'] ?? ucfirst($slug),
+                'add_new_item' => sprintf('Add New %s', $definition['singular'] ?? ucfirst($slug)),
+                'edit_item' => sprintf('Edit %s', $definition['singular'] ?? ucfirst($slug)),
+                'new_item' => sprintf('New %s', $definition['singular'] ?? ucfirst($slug)),
+                'view_item' => sprintf('View %s', $definition['singular'] ?? ucfirst($slug)),
+                'all_items' => $definition['plural'] ?? ucfirst($slug),
+            ],
+            'public' => !empty($definition['public']),
+            'show_ui' => true,
+            'show_in_menu' => true,
+            'show_in_rest' => array_key_exists('show_in_rest', $definition) ? !empty($definition['show_in_rest']) : true,
+            'rest_base' => $slug,
+            'menu_position' => (int) ($definition['menu_position'] ?? 25),
+            'menu_icon' => sanitize_text_field((string) ($definition['icon'] ?? 'dashicons-admin-post')),
+            'supports' => is_array($definition['supports'] ?? null) ? $definition['supports'] : ['title', 'editor'],
+            'has_archive' => !empty($definition['has_archive']),
+            'hierarchical' => !empty($definition['hierarchical']),
+            'taxonomies' => is_array($definition['taxonomies'] ?? null) ? $definition['taxonomies'] : [],
+            'rewrite' => ['slug' => $slug],
+        ]);
+    }
+}
+add_action('init', 'vue_dynamic_cpt_register_all', 9);
+
+function vue_dynamic_cpt_find_definition_index($definitions, $slug)
+{
+    foreach ($definitions as $index => $definition) {
+        if (($definition['slug'] ?? '') === $slug) {
+            return $index;
+        }
+    }
+    return -1;
+}
+
+function vue_dynamic_cpt_rest_list()
+{
+    $definitions = vue_dynamic_cpt_get_definitions();
+    usort($definitions, function ($a, $b) {
+        return ((int) ($a['order'] ?? 0)) <=> ((int) ($b['order'] ?? 0));
+    });
+    return rest_ensure_response(['items' => $definitions]);
+}
+
+function vue_dynamic_cpt_rest_create(WP_REST_Request $request)
+{
+    $payload = $request->get_json_params();
+    if (!is_array($payload)) {
+        $payload = $request->get_params();
+    }
+
+    $definitions = vue_dynamic_cpt_get_definitions();
+    $sanitized = vue_dynamic_cpt_sanitize_definition($payload);
+    if (is_wp_error($sanitized)) {
+        return $sanitized;
+    }
+    if (vue_dynamic_cpt_find_definition_index($definitions, $sanitized['slug']) >= 0) {
+        return new WP_Error('slug_exists', 'CPT definition already exists', ['status' => 409]);
+    }
+
+    $sanitized['order'] = count($definitions);
+    $definitions[] = $sanitized;
+    vue_dynamic_cpt_save_definitions($definitions);
+    vue_dynamic_cpt_flush_rewrite_rules();
+    return rest_ensure_response(['success' => true, 'item' => $sanitized]);
+}
+
+function vue_dynamic_cpt_rest_update(WP_REST_Request $request)
+{
+    $slug = sanitize_key((string) $request['slug']);
+    if ($slug === '') {
+        return new WP_Error('invalid_slug', 'Invalid slug', ['status' => 400]);
+    }
+
+    $payload = $request->get_json_params();
+    if (!is_array($payload)) {
+        $payload = $request->get_params();
+    }
+    if (!isset($payload['slug'])) {
+        $payload['slug'] = $slug;
+    }
+
+    $definitions = vue_dynamic_cpt_get_definitions();
+    $index = vue_dynamic_cpt_find_definition_index($definitions, $slug);
+    if ($index < 0) {
+        return new WP_Error('not_found', 'CPT definition not found', ['status' => 404]);
+    }
+
+    $sanitized = vue_dynamic_cpt_sanitize_definition($payload, $slug);
+    if (is_wp_error($sanitized)) {
+        return $sanitized;
+    }
+
+    $target_slug = $sanitized['slug'];
+    $duplicate_index = vue_dynamic_cpt_find_definition_index($definitions, $target_slug);
+    if ($duplicate_index >= 0 && $duplicate_index !== $index) {
+        return new WP_Error('slug_exists', 'Another CPT with this slug already exists', ['status' => 409]);
+    }
+
+    $sanitized['order'] = isset($payload['order']) ? (int) $payload['order'] : (int) ($definitions[$index]['order'] ?? $index);
+    $definitions[$index] = $sanitized;
+    usort($definitions, function ($a, $b) {
+        return ((int) ($a['order'] ?? 0)) <=> ((int) ($b['order'] ?? 0));
+    });
+    $definitions = array_values(array_map(function ($item, $position) {
+        $item['order'] = $position;
+        return $item;
+    }, $definitions, array_keys($definitions)));
+
+    vue_dynamic_cpt_save_definitions($definitions);
+    vue_dynamic_cpt_flush_rewrite_rules();
+    return rest_ensure_response(['success' => true, 'item' => $sanitized]);
+}
+
+function vue_dynamic_cpt_rest_delete(WP_REST_Request $request)
+{
+    $slug = sanitize_key((string) $request['slug']);
+    if ($slug === '') {
+        return new WP_Error('invalid_slug', 'Invalid slug', ['status' => 400]);
+    }
+    $definitions = vue_dynamic_cpt_get_definitions();
+    $index = vue_dynamic_cpt_find_definition_index($definitions, $slug);
+    if ($index < 0) {
+        return new WP_Error('not_found', 'CPT definition not found', ['status' => 404]);
+    }
+    array_splice($definitions, $index, 1);
+    $definitions = array_values(array_map(function ($item, $position) {
+        $item['order'] = $position;
+        return $item;
+    }, $definitions, array_keys($definitions)));
+    vue_dynamic_cpt_save_definitions($definitions);
+    vue_dynamic_cpt_flush_rewrite_rules();
+    return rest_ensure_response(['success' => true]);
+}
+
+function vue_dynamic_cpt_rest_reorder(WP_REST_Request $request)
+{
+    $order = $request->get_param('order');
+    if (!is_array($order)) {
+        return new WP_Error('invalid_order', 'order must be an array of slugs', ['status' => 400]);
+    }
+    $definitions = vue_dynamic_cpt_get_definitions();
+    $map = [];
+    foreach ($definitions as $definition) {
+        $map[$definition['slug']] = $definition;
+    }
+    $next = [];
+    foreach ($order as $position => $slug) {
+        $slug = sanitize_key((string) $slug);
+        if (!isset($map[$slug])) {
+            continue;
+        }
+        $item = $map[$slug];
+        $item['order'] = $position;
+        $next[] = $item;
+        unset($map[$slug]);
+    }
+    foreach ($map as $item) {
+        $item['order'] = count($next);
+        $next[] = $item;
+    }
+    vue_dynamic_cpt_save_definitions($next);
+    return rest_ensure_response(['success' => true, 'items' => $next]);
+}
+
+function vue_dynamic_cpt_menu_items()
+{
+    $definitions = vue_dynamic_cpt_get_definitions();
+    usort($definitions, function ($a, $b) {
+        return ((int) ($a['order'] ?? 0)) <=> ((int) ($b['order'] ?? 0));
+    });
+    $items = [];
+    foreach ($definitions as $definition) {
+        $slug = sanitize_key($definition['slug'] ?? '');
+        if ($slug === '') {
+            continue;
+        }
+        $label = sanitize_text_field((string) ($definition['plural'] ?? $slug));
+        $items[] = [
+            'id' => $slug,
+            'label' => $label,
+            'icon' => sanitize_text_field((string) ($definition['icon'] ?? 'Document')),
+            'route' => '/admin/cpt/' . $slug,
+            'children' => [
+                [
+                    'id' => $slug . '_all',
+                    'label' => 'All Items',
+                    'route' => '/admin/cpt/' . $slug . '/list',
+                ],
+                [
+                    'id' => $slug . '_new',
+                    'label' => 'Add New',
+                    'route' => '/admin/cpt/' . $slug . '/new',
+                ],
+            ],
+        ];
+    }
+    return $items;
+}
+
+function vue_dynamic_cpt_rest_menu()
+{
+    return rest_ensure_response(['items' => vue_dynamic_cpt_menu_items()]);
+}
+
+function vue_dynamic_cpt_register_routes()
+{
+    register_rest_route('custom-cpt/v1', '/list', [
+        'methods' => 'GET',
+        'callback' => 'vue_dynamic_cpt_rest_list',
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    register_rest_route('custom-cpt/v1', '/create', [
+        'methods' => 'POST',
+        'callback' => 'vue_dynamic_cpt_rest_create',
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    register_rest_route('custom-cpt/v1', '/update/(?P<slug>[a-z0-9_\\-]+)', [
+        'methods' => 'POST',
+        'callback' => 'vue_dynamic_cpt_rest_update',
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    register_rest_route('custom-cpt/v1', '/delete/(?P<slug>[a-z0-9_\\-]+)', [
+        'methods' => 'DELETE',
+        'callback' => 'vue_dynamic_cpt_rest_delete',
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    register_rest_route('custom-cpt/v1', '/reorder', [
+        'methods' => 'POST',
+        'callback' => 'vue_dynamic_cpt_rest_reorder',
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    register_rest_route('custom-admin/v1', '/menu', [
+        'methods' => 'GET',
+        'callback' => 'vue_dynamic_cpt_rest_menu',
+        'permission_callback' => function () {
+            return is_user_logged_in();
+        },
+    ]);
+}
+add_action('rest_api_init', 'vue_dynamic_cpt_register_routes');

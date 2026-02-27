@@ -139,6 +139,30 @@ const routes = [
         name: "post-custom-fields.manager",
         component: () => import("@/views/MetaFields/CustomFieldManager.vue"),
         meta: { permission: "users:manage", area: "admin" }
+      },
+      {
+        path: "settings/cpt-builder",
+        name: "cpt.builder",
+        component: () => import("@/views/CPT/CptBuilder.vue"),
+        meta: { permission: "users:manage", area: "admin" }
+      },
+      {
+        path: "cpt/:slug/list",
+        name: "cpt.list",
+        component: () => import("@/views/CPT/CptList.vue"),
+        meta: { permission: "posts:manage", area: "admin" }
+      },
+      {
+        path: "cpt/:slug/new",
+        name: "cpt.new",
+        component: () => import("@/views/CPT/CptEditor.vue"),
+        meta: { permission: "posts:manage", area: "admin" }
+      },
+      {
+        path: "cpt/:slug/edit/:id",
+        name: "cpt.edit",
+        component: () => import("@/views/CPT/CptEditor.vue"),
+        meta: { permission: "posts:manage", area: "admin" }
       }
     ]
   },

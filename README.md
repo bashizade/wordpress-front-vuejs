@@ -75,6 +75,25 @@ define('CUSTOM_AUTH_IPPANEL_SENDER', 'your_sender_number');
 - `GET /wp-json/custom-api/v1/user/meta/{id}`
 - `GET /wp-json/custom-api/v1/user/meta/me`
 - `POST /wp-json/custom-api/v1/user/meta/update`
+- `GET /wp-json/custom-fields/v1/fields?post_type={slug}`
+- `GET /wp-json/custom-fields/v1/fields/all`
+- `POST /wp-json/custom-fields/v1/fields/all`
+- `GET /wp-json/custom-fields/v1/post-types`
+- `GET /wp-json/custom-fields/v1/meta/{post_id}`
+- `POST /wp-json/custom-fields/v1/meta/{post_id}`
+- `GET /wp-json/custom-cpt/v1/list`
+- `POST /wp-json/custom-cpt/v1/create`
+- `POST /wp-json/custom-cpt/v1/update/{slug}`
+- `DELETE /wp-json/custom-cpt/v1/delete/{slug}`
+- `POST /wp-json/custom-cpt/v1/reorder`
+- `GET /wp-json/custom-admin/v1/menu`
+
+## Dynamic CPT Builder
+- Admin page: `/admin/settings/cpt-builder`
+- Dynamic CPT list: `/admin/cpt/{slug}/list`
+- Dynamic CPT editor: `/admin/cpt/{slug}/new` and `/admin/cpt/{slug}/edit/{id}`
+- CPT definitions are stored in WordPress option: `vue_dashboard_dynamic_cpt_definitions`
+- Dynamic CPTs are registered on `init` with `show_in_rest` support for automatic REST exposure.
 
 ## Environment
 Copy `.env.example` to `.env`:
