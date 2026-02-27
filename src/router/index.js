@@ -4,6 +4,60 @@ import { useAuthStore } from "@/stores/authStore";
 
 const routes = [
   {
+    path: "/",
+    name: "store.home",
+    component: () => import("@/views/storefront/index.vue"),
+    meta: { title: "Home" }
+  },
+  {
+    path: "/products",
+    name: "store.products",
+    component: () => import("@/views/storefront/products.vue"),
+    meta: { title: "Products" }
+  },
+  {
+    path: "/product/:slug",
+    name: "store.product",
+    component: () => import("@/views/storefront/product.vue"),
+    meta: { title: "Product" }
+  },
+  {
+    path: "/cart",
+    name: "store.cart",
+    component: () => import("@/views/storefront/cart.vue"),
+    meta: { title: "Cart" }
+  },
+  {
+    path: "/checkout",
+    name: "store.checkout",
+    component: () => import("@/views/storefront/checkout.vue"),
+    meta: { title: "Checkout" }
+  },
+  {
+    path: "/blogs",
+    name: "store.blogs",
+    component: () => import("@/views/storefront/blogs.vue"),
+    meta: { title: "Blogs" }
+  },
+  {
+    path: "/blog/:slug",
+    name: "store.blog",
+    component: () => import("@/views/storefront/blog.vue"),
+    meta: { title: "Blog" }
+  },
+  {
+    path: "/contact",
+    name: "store.contact",
+    component: () => import("@/views/storefront/contact.vue"),
+    meta: { title: "Contact" }
+  },
+  {
+    path: "/about",
+    name: "store.about",
+    component: () => import("@/views/storefront/about.vue"),
+    meta: { title: "About" }
+  },
+  {
     path: "/login",
     name: "login",
     component: () => import("@/views/Login.vue"),
@@ -202,10 +256,6 @@ const routes = [
         meta: { area: "user" }
       }
     ]
-  },
-  {
-    path: "/",
-    redirect: "/login"
   },
   {
     path: "/:pathMatch(.*)*",

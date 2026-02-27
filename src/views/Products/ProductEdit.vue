@@ -7,6 +7,7 @@ import { productApi, productCategoryApi } from "@/api/woocommerce";
 import ProductAttributes from "@/components/Variations/ProductAttributes.vue";
 import VariationsList from "@/components/Variations/VariationsList.vue";
 import ProductEditorDynamicFields from "@/components/CustomFields/ProductEditorDynamicFields.vue";
+import FeaturedImagePicker from "@/components/Products/FeaturedImagePicker.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -16,6 +17,10 @@ const categories = ref([]);
 const activeTab = ref("general");
 const productAttributes = ref([]);
 const metaRef = ref(null);
+const featuredImage = ref({
+  id: null,
+  url: ""
+});
 
 const form = reactive({
   name: "",
@@ -43,6 +48,10 @@ const load = async () => {
     form.status = product.status || "draft";
     form.categories = (product.categories || []).map((item) => item.id);
     productAttributes.value = product.attributes || [];
+    featuredImage.value = {
+      id: product.images?.[0]?.id || null,
+      url: product.images?.[0]?.src || ""
+    };
   } finally {
     loading.value = false;
   }
@@ -53,7 +62,8 @@ const save = async () => {
   try {
     await productApi.update(route.params.id, {
       ...form,
-      categories: form.categories.map((id) => ({ id }))
+      categories: form.categories.map((id) => ({ id })),
+      images: featuredImage.value.id ? [{ id: Number(featuredImage.value.id) }] : []
     });
     await metaRef.value?.saveMeta?.(route.params.id);
     ElMessage.success("Product updated");
@@ -116,6 +126,9 @@ onMounted(() => {
             </el-form-item>
             <el-form-item label="Description">
               <el-input v-model="form.description" type="textarea" :rows="8" />
+            </el-form-item>
+            <el-form-item label="Featured Image">
+              <FeaturedImagePicker v-model="featuredImage" />
             </el-form-item>
             <ProductEditorDynamicFields ref="metaRef" :product-id="route.params.id" />
           </el-form>

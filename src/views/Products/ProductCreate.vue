@@ -6,12 +6,17 @@ import PageHeader from "@/components/common/PageHeader.vue";
 import { useProductStore } from "@/stores/productStore";
 import { productCategoryApi } from "@/api/woocommerce";
 import ProductEditorDynamicFields from "@/components/CustomFields/ProductEditorDynamicFields.vue";
+import FeaturedImagePicker from "@/components/Products/FeaturedImagePicker.vue";
 
 const router = useRouter();
 const productStore = useProductStore();
 const saving = ref(false);
 const categories = ref([]);
 const metaRef = ref(null);
+const featuredImage = ref({
+  id: null,
+  url: ""
+});
 
 const form = reactive({
   name: "",
@@ -34,7 +39,8 @@ const save = async () => {
   try {
     const created = await productStore.createProduct({
       ...form,
-      categories: form.categories.map((id) => ({ id }))
+      categories: form.categories.map((id) => ({ id })),
+      images: featuredImage.value.id ? [{ id: Number(featuredImage.value.id) }] : []
     });
     if (created?.id) {
       await metaRef.value?.saveMeta?.(created.id);
@@ -85,6 +91,9 @@ onMounted(loadCategories);
         </el-form-item>
         <el-form-item label="Description">
           <el-input v-model="form.description" type="textarea" :rows="8" />
+        </el-form-item>
+        <el-form-item label="Featured Image">
+          <FeaturedImagePicker v-model="featuredImage" />
         </el-form-item>
         <ProductEditorDynamicFields ref="metaRef" />
       </el-form>

@@ -95,6 +95,93 @@ define('CUSTOM_AUTH_IPPANEL_SENDER', 'your_sender_number');
 - CPT definitions are stored in WordPress option: `vue_dashboard_dynamic_cpt_definitions`
 - Dynamic CPTs are registered on `init` with `show_in_rest` support for automatic REST exposure.
 
+## Storefront (Public Website)
+
+### Added Pages
+- `/` -> `src/views/storefront/index.vue`
+- `/products` -> `src/views/storefront/products.vue`
+- `/product/:slug` -> `src/views/storefront/product.vue`
+- `/cart` -> `src/views/storefront/cart.vue`
+- `/checkout` -> `src/views/storefront/checkout.vue`
+- `/blogs` -> `src/views/storefront/blogs.vue`
+- `/blog/:slug` -> `src/views/storefront/blog.vue`
+- `/contact` -> `src/views/storefront/contact.vue`
+- `/about` -> `src/views/storefront/about.vue`
+
+### Storefront Structure
+- `src/services/api.js`
+- `src/stores/shopStore.js`
+- `src/stores/blogStore.js`
+- `src/stores/siteStore.js`
+- `src/components/storefront/`
+  - `SiteShell.vue`
+  - `Loader.vue`
+  - `Breadcrumb.vue`
+  - `Pagination.vue`
+  - `RatingStars.vue`
+  - `AddToCartButton.vue`
+  - `ProductCard.vue`
+  - `ProductGrid.vue`
+  - `ProductFilter.vue`
+  - `BlogCard.vue`
+
+### API Service Methods
+Implemented in `src/services/api.js`:
+- `getProducts()`
+- `getProduct(idOrSlug)`
+- `getPosts()`
+- `getPost(idOrSlug)`
+- `getCart()`
+- `addToCart()`
+- `updateCart()`
+- `removeFromCart()`
+- `checkout()`
+- `getPage(slug)`
+
+Additional helpers:
+- `getProductVariations()`
+- `getCategories()`
+- `getProductCategories()`
+- `getComments()`
+- `addComment()`
+- `sendContact()`
+- `getContactSettings()`
+
+### Example JSON Responses
+`GET /wp-json/wc/v3/products`
+```json
+[
+  {
+    "id": 101,
+    "name": "Running Shoes",
+    "slug": "running-shoes",
+    "price": "89.00",
+    "regular_price": "99.00",
+    "sale_price": "89.00",
+    "on_sale": true,
+    "stock_status": "instock",
+    "images": [{ "id": 1, "src": "https://site.com/uploads/shoes.jpg" }],
+    "attributes": [{ "name": "Size", "options": ["41", "42"] }]
+  }
+]
+```
+
+`GET /wp-json/wp/v2/posts?_embed=1`
+```json
+[
+  {
+    "id": 501,
+    "slug": "summer-style-guide",
+    "title": { "rendered": "Summer Style Guide" },
+    "excerpt": { "rendered": "<p>Quick tips...</p>" },
+    "content": { "rendered": "<p>Full content...</p>" },
+    "_embedded": {
+      "wp:featuredmedia": [{ "source_url": "https://site.com/uploads/blog.jpg" }]
+    }
+  }
+]
+```
+
 ## Environment
 Copy `.env.example` to `.env`:
 ```env
