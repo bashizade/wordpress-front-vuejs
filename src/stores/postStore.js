@@ -34,9 +34,10 @@ export const usePostStore = defineStore("postStore", () => {
 
   const createPost = async (payload) => {
     try {
-      await postApi.create(payload);
+      const created = await postApi.create(payload);
       ElMessage.success("Post created");
       await fetchPosts();
+      return created;
     } catch (error) {
       ElMessage.error(error?.response?.data?.message || "Create failed");
       throw error;

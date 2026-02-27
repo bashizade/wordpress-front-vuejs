@@ -53,9 +53,10 @@ export const useProductStore = defineStore("productStore", () => {
 
   const createProduct = async (payload) => {
     try {
-      await productApi.create(payload);
+      const created = await productApi.create(payload);
       ElMessage.success("Product created");
       await fetchProducts();
+      return created;
     } catch (error) {
       ElMessage.error(error?.response?.data?.message || "Create failed");
       throw error;

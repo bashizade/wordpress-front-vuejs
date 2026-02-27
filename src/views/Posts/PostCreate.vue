@@ -5,10 +5,12 @@ import { ElMessage } from "element-plus";
 import { categoryApi, tagApi } from "@/api/wordpress";
 import { usePostStore } from "@/stores/postStore";
 import PageHeader from "@/components/common/PageHeader.vue";
+import PostEditorDynamicFields from "@/components/CustomFields/PostEditorDynamicFields.vue";
 
 const router = useRouter();
 const postStore = usePostStore();
 const saving = ref(false);
+const metaRef = ref(null);
 const categories = ref([]);
 const tags = ref([]);
 
@@ -33,7 +35,10 @@ const loadTerms = async () => {
 const save = async () => {
   saving.value = true;
   try {
-    await postStore.createPost(form);
+    const created = await postStore.createPost(form);
+    if (created?.id) {
+      await metaRef.value?.saveMeta?.(created.id);
+    }
     router.push({ name: "posts.list" });
   } catch {
     ElMessage.error("Failed to create post");
@@ -77,6 +82,7 @@ onMounted(loadTerms);
             </el-select>
           </el-form-item>
         </div>
+        <PostEditorDynamicFields ref="metaRef" post-type="post" />
       </el-form>
       <div class="mt-2 flex justify-end gap-2">
         <el-button @click="router.push({ name: 'posts.list' })">Cancel</el-button>

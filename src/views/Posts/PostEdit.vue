@@ -4,11 +4,13 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { categoryApi, postApi, tagApi } from "@/api/wordpress";
 import PageHeader from "@/components/common/PageHeader.vue";
+import PostEditorDynamicFields from "@/components/CustomFields/PostEditorDynamicFields.vue";
 
 const route = useRoute();
 const router = useRouter();
 const loading = ref(true);
 const saving = ref(false);
+const metaRef = ref(null);
 const categories = ref([]);
 const tags = ref([]);
 
@@ -47,6 +49,7 @@ const save = async () => {
   saving.value = true;
   try {
     await postApi.update(route.params.id, form);
+    await metaRef.value?.saveMeta?.(route.params.id);
     ElMessage.success("Post updated");
     router.push({ name: "posts.list" });
   } catch (error) {
@@ -93,6 +96,7 @@ onMounted(load);
             </el-select>
           </el-form-item>
         </div>
+        <PostEditorDynamicFields ref="metaRef" :post-id="route.params.id" post-type="post" />
       </el-form>
       <div class="mt-2 flex justify-end gap-2">
         <el-button @click="router.push({ name: 'posts.list' })">Cancel</el-button>

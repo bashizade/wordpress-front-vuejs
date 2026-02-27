@@ -6,6 +6,7 @@ import PageHeader from "@/components/common/PageHeader.vue";
 import { productApi, productCategoryApi } from "@/api/woocommerce";
 import ProductAttributes from "@/components/Variations/ProductAttributes.vue";
 import VariationsList from "@/components/Variations/VariationsList.vue";
+import ProductEditorDynamicFields from "@/components/CustomFields/ProductEditorDynamicFields.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -14,6 +15,7 @@ const saving = ref(false);
 const categories = ref([]);
 const activeTab = ref("general");
 const productAttributes = ref([]);
+const metaRef = ref(null);
 
 const form = reactive({
   name: "",
@@ -53,6 +55,7 @@ const save = async () => {
       ...form,
       categories: form.categories.map((id) => ({ id }))
     });
+    await metaRef.value?.saveMeta?.(route.params.id);
     ElMessage.success("Product updated");
     router.push({ name: "products.list" });
   } catch (error) {
@@ -114,6 +117,7 @@ onMounted(() => {
             <el-form-item label="Description">
               <el-input v-model="form.description" type="textarea" :rows="8" />
             </el-form-item>
+            <ProductEditorDynamicFields ref="metaRef" :product-id="route.params.id" />
           </el-form>
           <div class="mt-2 flex justify-end gap-2">
             <el-button @click="router.push({ name: 'products.list' })">Cancel</el-button>

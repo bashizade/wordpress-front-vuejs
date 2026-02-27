@@ -5,11 +5,13 @@ import { ElMessage } from "element-plus";
 import PageHeader from "@/components/common/PageHeader.vue";
 import { useProductStore } from "@/stores/productStore";
 import { productCategoryApi } from "@/api/woocommerce";
+import ProductEditorDynamicFields from "@/components/CustomFields/ProductEditorDynamicFields.vue";
 
 const router = useRouter();
 const productStore = useProductStore();
 const saving = ref(false);
 const categories = ref([]);
+const metaRef = ref(null);
 
 const form = reactive({
   name: "",
@@ -30,10 +32,13 @@ const loadCategories = async () => {
 const save = async () => {
   saving.value = true;
   try {
-    await productStore.createProduct({
+    const created = await productStore.createProduct({
       ...form,
       categories: form.categories.map((id) => ({ id }))
     });
+    if (created?.id) {
+      await metaRef.value?.saveMeta?.(created.id);
+    }
     router.push({ name: "products.list" });
   } catch {
     ElMessage.error("Product create failed");
@@ -81,6 +86,7 @@ onMounted(loadCategories);
         <el-form-item label="Description">
           <el-input v-model="form.description" type="textarea" :rows="8" />
         </el-form-item>
+        <ProductEditorDynamicFields ref="metaRef" />
       </el-form>
       <div class="mt-2 flex justify-end gap-2">
         <el-button @click="router.push({ name: 'products.list' })">Cancel</el-button>

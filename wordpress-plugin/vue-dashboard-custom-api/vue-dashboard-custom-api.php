@@ -18,6 +18,7 @@ const VUE_AUTH_SMS_HOURLY_LIMIT = 5;
 const VUE_AUTH_TOKEN_TTL = 604800; // 7 days
 const VUE_AUTH_LOGIN_ATTEMPT_LIMIT = 10;
 const VUE_AUTH_LOGIN_ATTEMPT_WINDOW = 600;
+const VUE_POST_FIELDS_SCHEMA_OPTION = 'vue_dashboard_post_custom_fields_schema';
 
 class Vue_Ippanel_SMS_Service
 {
@@ -795,3 +796,808 @@ function vue_dashboard_update_user_meta(WP_REST_Request $request)
 
     return rest_ensure_response(['success' => true, 'user_id' => $user_id]);
 }
+
+function vue_post_fields_register_routes()
+{
+    register_rest_route('custom-fields/v1', '/fields', [
+        'methods' => 'GET',
+        'callback' => 'vue_post_fields_rest_get_fields',
+        'permission_callback' => function () {
+            return is_user_logged_in();
+        },
+    ]);
+
+    register_rest_route('custom-fields/v1', '/fields/all', [
+        'methods' => 'GET',
+        'callback' => 'vue_post_fields_rest_get_all_fields',
+        'permission_callback' => function () {
+            return is_user_logged_in();
+        },
+    ]);
+
+    register_rest_route('custom-fields/v1', '/fields/all', [
+        'methods' => 'POST',
+        'callback' => 'vue_post_fields_rest_save_all_fields',
+        'permission_callback' => function () {
+            return current_user_can('manage_options');
+        },
+    ]);
+
+    register_rest_route('custom-fields/v1', '/post-types', [
+        'methods' => 'GET',
+        'callback' => 'vue_post_fields_rest_get_post_types',
+        'permission_callback' => function () {
+            return is_user_logged_in();
+        },
+    ]);
+
+    register_rest_route('custom-fields/v1', '/meta/(?P<post_id>\d+)', [
+        'methods' => 'GET',
+        'callback' => 'vue_post_fields_rest_get_meta',
+        'permission_callback' => 'vue_post_fields_can_read_meta',
+    ]);
+
+    register_rest_route('custom-fields/v1', '/meta/(?P<post_id>\d+)', [
+        'methods' => 'POST',
+        'callback' => 'vue_post_fields_rest_save_meta',
+        'permission_callback' => 'vue_post_fields_can_edit_meta',
+    ]);
+}
+add_action('rest_api_init', 'vue_post_fields_register_routes');
+
+function vue_post_fields_get_schema()
+{
+    $schema = get_option(VUE_POST_FIELDS_SCHEMA_OPTION, []);
+    return is_array($schema) ? $schema : [];
+}
+
+function vue_post_fields_get_post_types()
+{
+    $objects = get_post_types(['show_ui' => true], 'objects');
+    $post_types = [];
+    foreach ($objects as $post_type => $object) {
+        if ($post_type === 'attachment') {
+            continue;
+        }
+        $post_types[] = [
+            'value' => $post_type,
+            'label' => $object->labels->singular_name ?: $post_type,
+        ];
+    }
+    return $post_types;
+}
+
+function vue_post_fields_clean_options($options)
+{
+    if (!is_array($options)) {
+        return [];
+    }
+    $clean = [];
+    foreach ($options as $item) {
+        $value = sanitize_text_field((string) $item);
+        if ($value !== '') {
+            $clean[] = $value;
+        }
+    }
+    return array_values(array_unique($clean));
+}
+
+function vue_post_fields_validate_definition($field)
+{
+    $allowed_types = ['text', 'textarea', 'number', 'select', 'checkbox', 'image', 'repeatable'];
+    $field_key = sanitize_key($field['field_key'] ?? '');
+    $label = sanitize_text_field((string) ($field['label'] ?? ''));
+    $type = sanitize_key($field['type'] ?? 'text');
+    $post_types = is_array($field['post_types'] ?? null) ? $field['post_types'] : [];
+
+    if ($field_key === '' || $label === '') {
+        return new WP_Error('invalid_field', 'field_key and label are required', ['status' => 400]);
+    }
+    if (!in_array($type, $allowed_types, true)) {
+        return new WP_Error('invalid_type', 'Unsupported field type', ['status' => 400]);
+    }
+
+    $normalized_post_types = [];
+    $existing_post_types = get_post_types([], 'names');
+    foreach ($post_types as $post_type) {
+        $post_type = sanitize_key($post_type);
+        if ($post_type && in_array($post_type, $existing_post_types, true)) {
+            $normalized_post_types[] = $post_type;
+        }
+    }
+    if (empty($normalized_post_types)) {
+        return new WP_Error('invalid_post_types', 'At least one valid post type is required', ['status' => 400]);
+    }
+
+    $normalized = [
+        'field_key' => $field_key,
+        'label' => $label,
+        'type' => $type,
+        'post_types' => array_values(array_unique($normalized_post_types)),
+        'required' => !empty($field['required']),
+        'options' => vue_post_fields_clean_options($field['options'] ?? []),
+        'min' => isset($field['min']) ? (float) $field['min'] : null,
+        'max' => isset($field['max']) ? (float) $field['max'] : null,
+        'order' => isset($field['order']) ? (int) $field['order'] : 0,
+        'repeatable_type' => sanitize_key($field['repeatable_type'] ?? 'text'),
+    ];
+
+    if (!in_array($normalized['repeatable_type'], ['text', 'number', 'textarea', 'select'], true)) {
+        $normalized['repeatable_type'] = 'text';
+    }
+
+    return $normalized;
+}
+
+function vue_post_fields_normalize_schema($schema)
+{
+    if (!is_array($schema)) {
+        return new WP_Error('invalid_schema', 'Schema must be an array', ['status' => 400]);
+    }
+
+    $normalized = [];
+    $seen_keys = [];
+    foreach ($schema as $index => $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $validated = vue_post_fields_validate_definition($field);
+        if (is_wp_error($validated)) {
+            return $validated;
+        }
+        if (isset($seen_keys[$validated['field_key']])) {
+            return new WP_Error('duplicate_key', 'Duplicate field_key found: ' . $validated['field_key'], ['status' => 400]);
+        }
+        $seen_keys[$validated['field_key']] = true;
+        if (!isset($validated['order']) || $validated['order'] <= 0) {
+            $validated['order'] = $index;
+        }
+        $normalized[] = $validated;
+    }
+
+    usort($normalized, function ($a, $b) {
+        return ((int) $a['order']) <=> ((int) $b['order']);
+    });
+
+    return $normalized;
+}
+
+function vue_post_fields_get_fields_for_post_type($post_type)
+{
+    $schema = vue_post_fields_get_schema();
+    $fields = [];
+    foreach ($schema as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $types = is_array($field['post_types'] ?? null) ? $field['post_types'] : [];
+        if (in_array($post_type, $types, true)) {
+            $fields[] = $field;
+        }
+    }
+    usort($fields, function ($a, $b) {
+        return ((int) ($a['order'] ?? 0)) <=> ((int) ($b['order'] ?? 0));
+    });
+    return $fields;
+}
+
+function vue_post_fields_contains_php_code($value)
+{
+    if (is_array($value)) {
+        foreach ($value as $item) {
+            if (vue_post_fields_contains_php_code($item)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return is_string($value) && preg_match('/<\?(php|=)?/i', $value);
+}
+
+function vue_post_fields_sanitize_single_value($field, $value)
+{
+    $type = $field['type'] ?? 'text';
+    if ($type === 'repeatable') {
+        if (!is_array($value)) {
+            $value = $value === null || $value === '' ? [] : [(string) $value];
+        }
+        $sub_field = $field;
+        $sub_field['type'] = $field['repeatable_type'] ?? 'text';
+        $sanitized_items = [];
+        foreach ($value as $item) {
+            $item_sanitized = vue_post_fields_sanitize_single_value($sub_field, $item);
+            if ($item_sanitized !== '' && $item_sanitized !== null) {
+                $sanitized_items[] = $item_sanitized;
+            }
+        }
+        return array_values($sanitized_items);
+    }
+
+    if ($type === 'checkbox') {
+        return !empty($value) ? '1' : '0';
+    }
+
+    if ($type === 'number') {
+        if ($value === '' || $value === null) {
+            return '';
+        }
+        return is_numeric($value) ? (string) (0 + $value) : '';
+    }
+
+    if ($type === 'textarea') {
+        return sanitize_textarea_field((string) $value);
+    }
+
+    if ($type === 'select') {
+        $sanitized = sanitize_text_field((string) $value);
+        $allowed = vue_post_fields_clean_options($field['options'] ?? []);
+        if (!empty($allowed) && !in_array($sanitized, $allowed, true)) {
+            return '';
+        }
+        return $sanitized;
+    }
+
+    if ($type === 'image') {
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+        return esc_url_raw((string) $value);
+    }
+
+    return sanitize_text_field((string) $value);
+}
+
+function vue_post_fields_validate_single_value($field, $value)
+{
+    if (vue_post_fields_contains_php_code($value)) {
+        return new WP_Error('invalid_content', 'Field contains disallowed executable content', ['status' => 400]);
+    }
+
+    $type = $field['type'] ?? 'text';
+    $required = !empty($field['required']);
+    $is_empty = ($value === '' || $value === null || (is_array($value) && empty($value)));
+
+    if ($required && $is_empty) {
+        return new WP_Error('required_field', sprintf('Field %s is required', $field['field_key']), ['status' => 400]);
+    }
+
+    if (($type === 'number') && !$is_empty) {
+        if (!is_numeric($value)) {
+            return new WP_Error('invalid_number', sprintf('Field %s must be numeric', $field['field_key']), ['status' => 400]);
+        }
+        $number = (float) $value;
+        if (isset($field['min']) && $field['min'] !== null && $number < (float) $field['min']) {
+            return new WP_Error('min_number', sprintf('Field %s minimum is %s', $field['field_key'], $field['min']), ['status' => 400]);
+        }
+        if (isset($field['max']) && $field['max'] !== null && $number > (float) $field['max']) {
+            return new WP_Error('max_number', sprintf('Field %s maximum is %s', $field['field_key'], $field['max']), ['status' => 400]);
+        }
+    }
+
+    if (($type === 'select') && !$is_empty) {
+        $allowed = vue_post_fields_clean_options($field['options'] ?? []);
+        if (!empty($allowed) && !in_array((string) $value, $allowed, true)) {
+            return new WP_Error('invalid_select', sprintf('Field %s has an invalid option', $field['field_key']), ['status' => 400]);
+        }
+    }
+
+    if ($type === 'repeatable' && !is_array($value) && !$is_empty) {
+        return new WP_Error('invalid_repeatable', sprintf('Field %s must be an array', $field['field_key']), ['status' => 400]);
+    }
+
+    return true;
+}
+
+function vue_post_fields_can_read_meta(WP_REST_Request $request)
+{
+    $post_id = (int) $request['post_id'];
+    return current_user_can('edit_post', $post_id) || current_user_can('read_post', $post_id);
+}
+
+function vue_post_fields_can_edit_meta(WP_REST_Request $request)
+{
+    $post_id = (int) $request['post_id'];
+    return current_user_can('edit_post', $post_id);
+}
+
+function vue_post_fields_rest_get_fields(WP_REST_Request $request)
+{
+    $post_type = sanitize_key((string) $request->get_param('post_type'));
+    if ($post_type === '') {
+        return new WP_Error('missing_post_type', 'post_type is required', ['status' => 400]);
+    }
+    return rest_ensure_response([
+        'post_type' => $post_type,
+        'fields' => vue_post_fields_get_fields_for_post_type($post_type),
+    ]);
+}
+
+function vue_post_fields_rest_get_all_fields()
+{
+    return rest_ensure_response(['fields' => vue_post_fields_get_schema()]);
+}
+
+function vue_post_fields_rest_save_all_fields(WP_REST_Request $request)
+{
+    $schema = $request->get_param('fields');
+    if (!is_array($schema)) {
+        $schema = $request->get_param('schema');
+    }
+    $normalized = vue_post_fields_normalize_schema($schema);
+    if (is_wp_error($normalized)) {
+        return $normalized;
+    }
+    update_option(VUE_POST_FIELDS_SCHEMA_OPTION, $normalized, false);
+    return rest_ensure_response(['success' => true, 'fields' => $normalized]);
+}
+
+function vue_post_fields_rest_get_post_types()
+{
+    return rest_ensure_response(['post_types' => vue_post_fields_get_post_types()]);
+}
+
+function vue_post_fields_rest_get_meta(WP_REST_Request $request)
+{
+    $post_id = (int) $request['post_id'];
+    $post = get_post($post_id);
+    if (!$post) {
+        return new WP_Error('not_found', 'Post not found', ['status' => 404]);
+    }
+    $fields = vue_post_fields_get_fields_for_post_type($post->post_type);
+    $meta = [];
+    foreach ($fields as $field) {
+        $key = $field['field_key'];
+        $value = get_post_meta($post_id, $key, true);
+        if (($field['type'] ?? '') === 'repeatable') {
+            if (is_string($value)) {
+                $decoded = json_decode($value, true);
+                if (is_array($decoded)) {
+                    $value = $decoded;
+                }
+            }
+            if (!is_array($value)) {
+                $value = [];
+            }
+        }
+        $meta[$key] = $value;
+    }
+    return rest_ensure_response([
+        'post_id' => $post_id,
+        'post_type' => $post->post_type,
+        'meta' => $meta,
+    ]);
+}
+
+function vue_post_fields_rest_save_meta(WP_REST_Request $request)
+{
+    $post_id = (int) $request['post_id'];
+    $post = get_post($post_id);
+    if (!$post) {
+        return new WP_Error('not_found', 'Post not found', ['status' => 404]);
+    }
+    $payload = $request->get_param('meta');
+    if (!is_array($payload)) {
+        return new WP_Error('invalid_meta', 'meta payload must be object', ['status' => 400]);
+    }
+
+    $fields = vue_post_fields_get_fields_for_post_type($post->post_type);
+    $allowed_by_key = [];
+    foreach ($fields as $field) {
+        $allowed_by_key[$field['field_key']] = $field;
+    }
+
+    foreach ($allowed_by_key as $field_key => $field) {
+        $incoming = array_key_exists($field_key, $payload) ? $payload[$field_key] : null;
+        $validation = vue_post_fields_validate_single_value($field, $incoming);
+        if (is_wp_error($validation)) {
+            return $validation;
+        }
+
+        $sanitized = vue_post_fields_sanitize_single_value($field, $incoming);
+        if (($field['type'] ?? '') === 'repeatable') {
+            update_post_meta($post_id, $field_key, wp_json_encode($sanitized));
+        } else {
+            update_post_meta($post_id, $field_key, $sanitized);
+        }
+    }
+
+    return rest_ensure_response(['success' => true, 'post_id' => $post_id]);
+}
+
+function vue_post_fields_render_admin_page()
+{
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    $schema = vue_post_fields_get_schema();
+    $post_types = vue_post_fields_get_post_types();
+    ?>
+    <div class="wrap">
+        <h1>Custom Post Fields Manager</h1>
+        <p>Create fields for posts, products, and any custom post type.</p>
+
+        <form method="post" action="">
+            <?php wp_nonce_field('vue_post_fields_admin_save', 'vue_post_fields_nonce'); ?>
+            <input type="hidden" name="vue_post_fields_action" value="save_schema" />
+            <table class="widefat striped" id="vue-post-fields-table">
+                <thead>
+                    <tr>
+                        <th>Field Key</th>
+                        <th>Label</th>
+                        <th>Type</th>
+                        <th>Post Types</th>
+                        <th>Required</th>
+                        <th>Options (comma)</th>
+                        <th>Repeatable Type</th>
+                        <th>Order</th>
+                        <th>Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($schema as $index => $field) : ?>
+                        <tr>
+                            <td><input type="text" name="fields[<?php echo esc_attr($index); ?>][field_key]" value="<?php echo esc_attr($field['field_key'] ?? ''); ?>" /></td>
+                            <td><input type="text" name="fields[<?php echo esc_attr($index); ?>][label]" value="<?php echo esc_attr($field['label'] ?? ''); ?>" /></td>
+                            <td>
+                                <select name="fields[<?php echo esc_attr($index); ?>][type]">
+                                    <?php foreach (['text', 'textarea', 'number', 'select', 'checkbox', 'image', 'repeatable'] as $type) : ?>
+                                        <option value="<?php echo esc_attr($type); ?>" <?php selected(($field['type'] ?? 'text'), $type); ?>><?php echo esc_html($type); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                            <td>
+                                <select multiple name="fields[<?php echo esc_attr($index); ?>][post_types][]" style="min-width:150px;min-height:80px;">
+                                    <?php foreach ($post_types as $post_type) : ?>
+                                        <option value="<?php echo esc_attr($post_type['value']); ?>" <?php selected(in_array($post_type['value'], $field['post_types'] ?? [], true), true); ?>>
+                                            <?php echo esc_html($post_type['label']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                            <td><input type="checkbox" name="fields[<?php echo esc_attr($index); ?>][required]" value="1" <?php checked(!empty($field['required'])); ?> /></td>
+                            <td><input type="text" name="fields[<?php echo esc_attr($index); ?>][options]" value="<?php echo esc_attr(implode(',', $field['options'] ?? [])); ?>" /></td>
+                            <td>
+                                <select name="fields[<?php echo esc_attr($index); ?>][repeatable_type]">
+                                    <?php foreach (['text', 'number', 'textarea', 'select'] as $sub_type) : ?>
+                                        <option value="<?php echo esc_attr($sub_type); ?>" <?php selected(($field['repeatable_type'] ?? 'text'), $sub_type); ?>><?php echo esc_html($sub_type); ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </td>
+                            <td><input type="number" name="fields[<?php echo esc_attr($index); ?>][order]" value="<?php echo esc_attr((int) ($field['order'] ?? $index)); ?>" /></td>
+                            <td><button type="button" class="button remove-row">Remove</button></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <p>
+                <button type="button" class="button" id="vue-post-fields-add-row">Add Field</button>
+                <button type="submit" class="button button-primary">Save Schema</button>
+            </p>
+        </form>
+    </div>
+    <script>
+    (function () {
+      const tableBody = document.querySelector("#vue-post-fields-table tbody");
+      const addBtn = document.getElementById("vue-post-fields-add-row");
+      if (!tableBody || !addBtn) return;
+      const postTypesHtml = <?php echo wp_json_encode(implode('', array_map(function ($post_type) {
+          return '<option value="' . esc_attr($post_type['value']) . '">' . esc_html($post_type['label']) . '</option>';
+      }, $post_types))); ?>;
+
+      const buildRow = (idx) => `
+        <tr>
+          <td><input type="text" name="fields[${idx}][field_key]" value="" /></td>
+          <td><input type="text" name="fields[${idx}][label]" value="" /></td>
+          <td>
+            <select name="fields[${idx}][type]">
+              <option value="text">text</option>
+              <option value="textarea">textarea</option>
+              <option value="number">number</option>
+              <option value="select">select</option>
+              <option value="checkbox">checkbox</option>
+              <option value="image">image</option>
+              <option value="repeatable">repeatable</option>
+            </select>
+          </td>
+          <td><select multiple name="fields[${idx}][post_types][]" style="min-width:150px;min-height:80px;">${postTypesHtml}</select></td>
+          <td><input type="checkbox" name="fields[${idx}][required]" value="1" /></td>
+          <td><input type="text" name="fields[${idx}][options]" value="" /></td>
+          <td>
+            <select name="fields[${idx}][repeatable_type]">
+              <option value="text">text</option>
+              <option value="number">number</option>
+              <option value="textarea">textarea</option>
+              <option value="select">select</option>
+            </select>
+          </td>
+          <td><input type="number" name="fields[${idx}][order]" value="${idx}" /></td>
+          <td><button type="button" class="button remove-row">Remove</button></td>
+        </tr>
+      `;
+
+      addBtn.addEventListener("click", function () {
+        const idx = tableBody.querySelectorAll("tr").length;
+        tableBody.insertAdjacentHTML("beforeend", buildRow(idx));
+      });
+
+      tableBody.addEventListener("click", function (e) {
+        if (e.target.classList.contains("remove-row")) {
+          e.target.closest("tr")?.remove();
+        }
+      });
+    })();
+    </script>
+    <?php
+}
+
+function vue_post_fields_handle_admin_form_submit()
+{
+    if (!is_admin() || !current_user_can('manage_options')) {
+        return;
+    }
+    if (!isset($_POST['vue_post_fields_action']) || $_POST['vue_post_fields_action'] !== 'save_schema') {
+        return;
+    }
+    check_admin_referer('vue_post_fields_admin_save', 'vue_post_fields_nonce');
+
+    $raw_fields = isset($_POST['fields']) ? wp_unslash($_POST['fields']) : [];
+    if (!is_array($raw_fields)) {
+        $raw_fields = [];
+    }
+    $prepared = [];
+    foreach ($raw_fields as $field) {
+        if (!is_array($field)) {
+            continue;
+        }
+        $prepared[] = [
+            'field_key' => sanitize_key($field['field_key'] ?? ''),
+            'label' => sanitize_text_field((string) ($field['label'] ?? '')),
+            'type' => sanitize_key($field['type'] ?? 'text'),
+            'post_types' => is_array($field['post_types'] ?? null) ? array_map('sanitize_key', $field['post_types']) : [],
+            'required' => !empty($field['required']),
+            'options' => vue_post_fields_clean_options(explode(',', (string) ($field['options'] ?? ''))),
+            'repeatable_type' => sanitize_key($field['repeatable_type'] ?? 'text'),
+            'order' => isset($field['order']) ? (int) $field['order'] : 0,
+        ];
+    }
+    $normalized = vue_post_fields_normalize_schema($prepared);
+    if (!is_wp_error($normalized)) {
+        update_option(VUE_POST_FIELDS_SCHEMA_OPTION, $normalized, false);
+    }
+}
+add_action('admin_init', 'vue_post_fields_handle_admin_form_submit');
+
+function vue_post_fields_add_admin_page()
+{
+    add_menu_page(
+        'Post Custom Fields',
+        'Post Custom Fields',
+        'manage_options',
+        'vue-post-custom-fields',
+        'vue_post_fields_render_admin_page',
+        'dashicons-feedback',
+        58
+    );
+}
+add_action('admin_menu', 'vue_post_fields_add_admin_page');
+
+function vue_post_fields_register_meta_boxes()
+{
+    $schema = vue_post_fields_get_schema();
+    $post_types = [];
+    foreach ($schema as $field) {
+        foreach (($field['post_types'] ?? []) as $post_type) {
+            $post_types[$post_type] = true;
+        }
+    }
+    foreach (array_keys($post_types) as $post_type) {
+        add_meta_box(
+            'vue_post_custom_fields_box',
+            'Custom Fields',
+            'vue_post_fields_render_meta_box',
+            $post_type,
+            'normal',
+            'default'
+        );
+    }
+}
+add_action('add_meta_boxes', 'vue_post_fields_register_meta_boxes');
+
+function vue_post_fields_render_field_input($field, $value, $name)
+{
+    $type = $field['type'] ?? 'text';
+    if ($type === 'textarea') {
+        echo '<textarea name="' . esc_attr($name) . '" style="width:100%;min-height:80px;">' . esc_textarea((string) $value) . '</textarea>';
+        return;
+    }
+    if ($type === 'number') {
+        echo '<input type="number" name="' . esc_attr($name) . '" value="' . esc_attr((string) $value) . '" />';
+        return;
+    }
+    if ($type === 'select') {
+        echo '<select name="' . esc_attr($name) . '">';
+        echo '<option value="">Select</option>';
+        foreach (($field['options'] ?? []) as $option) {
+            echo '<option value="' . esc_attr($option) . '" ' . selected((string) $value, (string) $option, false) . '>' . esc_html($option) . '</option>';
+        }
+        echo '</select>';
+        return;
+    }
+    if ($type === 'checkbox') {
+        echo '<label><input type="checkbox" name="' . esc_attr($name) . '" value="1" ' . checked(!empty($value), true, false) . ' /> Yes</label>';
+        return;
+    }
+    if ($type === 'image') {
+        echo '<input type="text" class="regular-text vue-post-image-url" name="' . esc_attr($name) . '" value="' . esc_attr((string) $value) . '" />';
+        echo ' <button type="button" class="button vue-post-pick-image">Select Image</button>';
+        return;
+    }
+    if ($type === 'repeatable') {
+        $items = [];
+        if (is_array($value)) {
+            $items = $value;
+        } elseif (is_string($value) && $value !== '') {
+            $decoded = json_decode($value, true);
+            if (is_array($decoded)) {
+                $items = $decoded;
+            }
+        }
+        echo '<div class="vue-repeatable-list" data-name="' . esc_attr($name) . '">';
+        if (empty($items)) {
+            $items = [''];
+        }
+        foreach ($items as $item) {
+            echo '<div style="margin-bottom:6px;display:flex;gap:6px;align-items:center;">';
+            echo '<input type="text" name="' . esc_attr($name) . '[]" value="' . esc_attr((string) $item) . '" class="regular-text" />';
+            echo '<button type="button" class="button vue-repeatable-remove">-</button>';
+            echo '</div>';
+        }
+        echo '<button type="button" class="button vue-repeatable-add">Add Item</button>';
+        echo '</div>';
+        return;
+    }
+    echo '<input type="text" name="' . esc_attr($name) . '" value="' . esc_attr((string) $value) . '" class="regular-text" />';
+}
+
+function vue_post_fields_render_meta_box($post)
+{
+    wp_nonce_field('vue_post_fields_save_meta', 'vue_post_fields_nonce');
+    $fields = vue_post_fields_get_fields_for_post_type($post->post_type);
+    if (empty($fields)) {
+        echo '<p>No custom fields assigned to this post type.</p>';
+        return;
+    }
+
+    echo '<table class="form-table">';
+    foreach ($fields as $field) {
+        $key = $field['field_key'];
+        $value = get_post_meta($post->ID, $key, true);
+        echo '<tr>';
+        echo '<th><label for="' . esc_attr($key) . '">' . esc_html($field['label']) . '</label></th>';
+        echo '<td>';
+        vue_post_fields_render_field_input($field, $value, 'vue_post_fields[' . $key . ']');
+        echo '</td>';
+        echo '</tr>';
+    }
+    echo '</table>';
+    ?>
+    <script>
+    (function () {
+      if (typeof wp === "undefined" || !wp.media) return;
+      document.querySelectorAll(".vue-post-pick-image").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const input = btn.parentElement.querySelector(".vue-post-image-url");
+          const frame = wp.media({ title: "Select image", button: { text: "Use image" }, multiple: false });
+          frame.on("select", function () {
+            const attachment = frame.state().get("selection").first().toJSON();
+            if (input) input.value = attachment.id || attachment.url || "";
+          });
+          frame.open();
+        });
+      });
+      document.querySelectorAll(".vue-repeatable-list").forEach(function (container) {
+        container.addEventListener("click", function (e) {
+          if (e.target.classList.contains("vue-repeatable-add")) {
+            const row = document.createElement("div");
+            row.style.marginBottom = "6px";
+            row.style.display = "flex";
+            row.style.gap = "6px";
+            row.style.alignItems = "center";
+            row.innerHTML = '<input type="text" name="' + container.dataset.name + '[]" value="" class="regular-text" /><button type="button" class="button vue-repeatable-remove">-</button>';
+            container.insertBefore(row, e.target);
+          }
+          if (e.target.classList.contains("vue-repeatable-remove")) {
+            e.target.parentElement.remove();
+          }
+        });
+      });
+    })();
+    </script>
+    <?php
+}
+
+function vue_post_fields_save_post_meta($post_id, $post)
+{
+    if (!isset($_POST['vue_post_fields_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['vue_post_fields_nonce'])), 'vue_post_fields_save_meta')) {
+        return;
+    }
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
+        return;
+    }
+    if (!current_user_can('edit_post', $post_id)) {
+        return;
+    }
+    if (!is_object($post)) {
+        $post = get_post($post_id);
+    }
+    if (!$post) {
+        return;
+    }
+    $incoming = isset($_POST['vue_post_fields']) && is_array($_POST['vue_post_fields']) ? wp_unslash($_POST['vue_post_fields']) : [];
+    $fields = vue_post_fields_get_fields_for_post_type($post->post_type);
+    foreach ($fields as $field) {
+        $key = $field['field_key'];
+        $value = array_key_exists($key, $incoming) ? $incoming[$key] : null;
+        $validation = vue_post_fields_validate_single_value($field, $value);
+        if (is_wp_error($validation)) {
+            continue;
+        }
+        $sanitized = vue_post_fields_sanitize_single_value($field, $value);
+        if (($field['type'] ?? '') === 'repeatable') {
+            update_post_meta($post_id, $key, wp_json_encode($sanitized));
+        } else {
+            update_post_meta($post_id, $key, $sanitized);
+        }
+    }
+}
+add_action('save_post', 'vue_post_fields_save_post_meta', 10, 2);
+
+function vue_post_fields_prepare_custom_fields_for_post($post_id, $post_type)
+{
+    $fields = vue_post_fields_get_fields_for_post_type($post_type);
+    $output = [];
+    foreach ($fields as $field) {
+        $key = $field['field_key'];
+        $value = get_post_meta($post_id, $key, true);
+        if (($field['type'] ?? '') === 'repeatable') {
+            if (is_string($value) && $value !== '') {
+                $decoded = json_decode($value, true);
+                $value = is_array($decoded) ? $decoded : [];
+            } elseif (!is_array($value)) {
+                $value = [];
+            }
+        }
+        $output[$key] = $value;
+    }
+    return $output;
+}
+
+function vue_post_fields_add_to_wc_response($response, $object)
+{
+    if (!($response instanceof WP_REST_Response)) {
+        return $response;
+    }
+    if (!$object || !method_exists($object, 'get_id')) {
+        return $response;
+    }
+    $product_id = (int) $object->get_id();
+    if ($product_id <= 0) {
+        return $response;
+    }
+    $custom_fields = vue_post_fields_prepare_custom_fields_for_post($product_id, 'product');
+    $data = $response->get_data();
+    $data['custom_fields'] = $custom_fields;
+    if (!isset($data['meta_data']) || !is_array($data['meta_data'])) {
+        $data['meta_data'] = [];
+    }
+    foreach ($custom_fields as $key => $value) {
+        $data['meta_data'][] = [
+            'key' => $key,
+            'value' => $value,
+        ];
+    }
+    $response->set_data($data);
+    return $response;
+}
+add_filter('woocommerce_rest_prepare_product_object', 'vue_post_fields_add_to_wc_response', 10, 2);

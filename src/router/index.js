@@ -133,6 +133,12 @@ const routes = [
         name: "users.custom-fields",
         component: () => import("@/views/Users/CustomFieldsManager.vue"),
         meta: { permission: "users:manage", area: "admin" }
+      },
+      {
+        path: "post-custom-fields",
+        name: "post-custom-fields.manager",
+        component: () => import("@/views/MetaFields/CustomFieldManager.vue"),
+        meta: { permission: "users:manage", area: "admin" }
       }
     ]
   },

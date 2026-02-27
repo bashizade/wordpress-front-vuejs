@@ -25,7 +25,8 @@ const menuItems = computed(() => [
   { label: t("menu.customers"), to: { name: "customers.list" }, permission: "customers:view", icon: "User" },
   { label: t("menu.coupons"), to: { name: "coupons.list" }, permission: "coupons:manage", icon: "Discount" },
   { label: t("menu.users"), to: { name: "users.list" }, permission: "users:manage", icon: "Avatar" },
-  { label: t("menu.customFields"), to: { name: "users.custom-fields" }, permission: "users:manage", icon: "EditPen" }
+  { label: t("menu.customFields"), to: { name: "users.custom-fields" }, permission: "users:manage", icon: "EditPen" },
+  { label: t("menu.postCustomFields"), to: { name: "post-custom-fields.manager" }, permission: "users:manage", icon: "Files" }
 ]);
 
 const visibleItems = computed(() =>
